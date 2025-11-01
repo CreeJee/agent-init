@@ -7,10 +7,13 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@byjohann/toon": "^0.6.0",
     "@hono/mcp": "^0.1.5",
     "@hono/node-server": "^1.19.6",
     "@modelcontextprotocol/sdk": "^1.20.2",
-    "hono": "^4.10.4"
+    "hono": "^4.10.4",
+    "valibot": "^1.1.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
