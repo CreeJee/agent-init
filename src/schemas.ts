@@ -1,16 +1,19 @@
 import * as v from 'valibot'
 
 // ============================================================================
-// JWT Payload Schema
+// JWT Payload Schema (Workspace-based)
 // ============================================================================
 
 export const JWTPayloadSchema = v.object({
-  sub: v.string(),
-  team_id: v.string(),
-  project_id: v.optional(v.string()),
-  permissions: v.array(v.string()),
+  sub: v.string(), // User ID
+  workspace_id: v.string(), // Primary workspace
+  workspaces: v.array(v.string()), // All accessible workspaces
+  permissions: v.array(v.string()), // e.g., ["read:workspace:project-alpha", "write:workspace:project-alpha", "admin:workspaces"]
   exp: v.number(),
   iat: v.optional(v.number()),
+  // Legacy support (optional, will be removed in future)
+  team_id: v.optional(v.string()),
+  project_id: v.optional(v.string()),
 })
 
 export type JWTPayload = v.InferOutput<typeof JWTPayloadSchema>
@@ -28,7 +31,7 @@ export const SearchDocsInputSchema = v.object({
     v.minLength(1, 'Query must not be empty'),
     v.maxLength(500, 'Query is too long')
   ),
-  team: v.optional(v.string()),
+  workspace: v.optional(v.string()), // Workspace to search in (defaults to JWT workspace_id)
   tags: v.optional(v.array(v.string())),
 })
 
@@ -171,3 +174,106 @@ export const WriteContextResponseSchema = v.object({
 })
 
 export type WriteContextResponse = v.InferOutput<typeof WriteContextResponseSchema>
+
+// ============================================================================
+// Workspace Schemas (NEW)
+// ============================================================================
+
+/**
+ * Workspace info
+ */
+export const WorkspaceInfoSchema = v.object({
+  id: v.string(),
+  name: v.string(),
+  description: v.optional(v.string()),
+  documentCount: v.number(),
+  lastModified: v.optional(v.string()), // ISO 8601
+  permissions: v.array(v.string()), // User's permissions for this workspace
+})
+
+export type WorkspaceInfo = v.InferOutput<typeof WorkspaceInfoSchema>
+
+/**
+ * list_workspaces response
+ */
+export const ListWorkspacesResponseSchema = v.object({
+  workspaces: v.array(WorkspaceInfoSchema),
+})
+
+export type ListWorkspacesResponse = v.InferOutput<typeof ListWorkspacesResponseSchema>
+
+/**
+ * Symlink info
+ */
+export const SymlinkInfoSchema = v.object({
+  path: v.string(), // Path in workspace
+  source: v.string(), // Relative path to storage
+  sourceTeam: v.string(),
+  sourceFile: v.string(),
+  isValid: v.boolean(), // Whether symlink resolves correctly
+  target: v.optional(v.string()), // Resolved absolute path
+  error: v.optional(v.string()), // Error message if broken
+  size: v.optional(v.number()),
+  lastModified: v.optional(v.string()),
+})
+
+export type SymlinkInfo = v.InferOutput<typeof SymlinkInfoSchema>
+
+/**
+ * Storage file info (with reverse references)
+ */
+export const StorageFileInfoSchema = v.object({
+  team: v.string(),
+  file: v.string(),
+  size: v.number(),
+  lastModified: v.string(),
+  linkedBy: v.array(
+    v.object({
+      workspace: v.string(),
+      path: v.string(),
+    })
+  ),
+})
+
+export type StorageFileInfo = v.InferOutput<typeof StorageFileInfoSchema>
+
+// ============================================================================
+// Admin API Schemas
+// ============================================================================
+
+/**
+ * Create workspace input
+ */
+export const CreateWorkspaceInputSchema = v.object({
+  id: v.pipe(
+    v.string(),
+    v.minLength(1),
+    v.regex(/^[a-zA-Z0-9_-]+$/, 'Workspace ID must be alphanumeric')
+  ),
+  name: v.string(),
+  description: v.optional(v.string()),
+})
+
+export type CreateWorkspaceInput = v.InferOutput<typeof CreateWorkspaceInputSchema>
+
+/**
+ * Create symlink input
+ */
+export const CreateSymlinkInputSchema = v.object({
+  sourceTeam: v.pipe(
+    v.string(),
+    v.regex(/^[a-zA-Z0-9_-]+$/, 'Team name must be alphanumeric')
+  ),
+  sourceFile: v.pipe(
+    v.string(),
+    v.regex(/^[a-zA-Z0-9_-]+\.md$/, 'File must be a markdown file')
+  ),
+  targetPath: v.pipe(
+    v.string(),
+    v.regex(/^[a-zA-Z0-9_-]+\.md$/, 'Target path must be a markdown file'),
+    v.custom((value) => !value.includes('..') && !value.includes('/'), 'Invalid target path')
+  ),
+  readOnly: v.optional(v.boolean()),
+})
+
+export type CreateSymlinkInput = v.InferOutput<typeof CreateSymlinkInputSchema>
