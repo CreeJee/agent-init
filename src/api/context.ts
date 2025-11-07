@@ -5,17 +5,17 @@ import { getJWTPayload } from '../auth/jwt.js'
 import { getContextDocument, updateContextDocument } from '../services/context-service.js'
 
 /**
- * GET /api/context/:team/:file
+ * GET /api/context/:workspace/:path
  *
- * Resolve ResourceLink - return full markdown content
+ * Resolve ResourceLink - return full markdown content from workspace
  */
 export const getContextHandler = async (c: Context<{ Variables: AppVariables }>) => {
-  const team = c.req.param('team')
-  const file = c.req.param('file')
+  const workspace = c.req.param('workspace')
+  const docPath = c.req.param('path')
   const payload = getJWTPayload(c)
 
   try {
-    const { content, size } = await getContextDocument(team, file, payload)
+    const { content, size } = await getContextDocument(workspace, docPath, payload)
 
     // For large files, use streaming
     if (size > 100 * 1024) {
@@ -33,7 +33,7 @@ export const getContextHandler = async (c: Context<{ Variables: AppVariables }>)
   } catch (error) {
     const err = error as Error
     if (err.message.includes('not found')) {
-      return c.json({ error: 'Not Found', message: `Document ${team}/${file} not found` }, 404)
+      return c.json({ error: 'Not Found', message: `Document ${workspace}/${docPath} not found` }, 404)
     }
     if (err.message.includes('Access denied')) {
       return c.json({ error: 'Forbidden', message: err.message }, 403)
@@ -43,13 +43,13 @@ export const getContextHandler = async (c: Context<{ Variables: AppVariables }>)
 }
 
 /**
- * PUT /api/context/:team/:file
+ * PUT /api/context/:workspace/:path
  *
- * Update or create a context document
+ * Update a context document in workspace
  */
 export const updateContextHandler = async (c: Context<{ Variables: AppVariables }>) => {
-  const team = c.req.param('team')
-  const file = c.req.param('file')
+  const workspace = c.req.param('workspace')
+  const docPath = c.req.param('path')
   const payload = getJWTPayload(c)
 
   const content = await c.req.text()
@@ -58,12 +58,12 @@ export const updateContextHandler = async (c: Context<{ Variables: AppVariables 
   }
 
   try {
-    const result = await updateContextDocument(team, file, content, payload)
+    const result = await updateContextDocument(workspace, docPath, content, payload)
 
     return c.json({
       success: result.success,
-      team,
-      file,
+      workspace,
+      path: docPath,
       message: result.message,
     })
   } catch (error) {

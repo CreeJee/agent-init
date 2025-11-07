@@ -1,25 +1,27 @@
 import { getStorage } from '../storage/filesystem.js'
+import { getPermissionManager } from '../auth/permission-manager.js'
 import type { JWTPayload } from '../schemas.js'
 
 /**
- * Service layer for context operations
+ * Service layer for context operations (Workspace-based)
  */
 
 /**
- * Get a context document
+ * Get a context document from workspace
  */
 export async function getContextDocument(
-  team: string,
-  file: string,
+  workspace: string,
+  path: string,
   userPayload: JWTPayload
 ): Promise<{ content: string; size: number }> {
-  // Verify team access
-  if (userPayload.team_id !== team) {
-    throw new Error(`Access denied to team '${team}'. Your team is '${userPayload.team_id}'`)
-  }
-
   const storage = getStorage()
-  const doc = await storage.readDocument(team, file)
+  const permissionManager = getPermissionManager()
+
+  // Check read permission
+  await permissionManager.assertCanReadDocument(userPayload, workspace, path)
+
+  // Read document from workspace
+  const doc = await storage.readDocument(workspace, path)
 
   return {
     content: doc.content,
@@ -28,29 +30,28 @@ export async function getContextDocument(
 }
 
 /**
- * Update or create a context document
+ * Update a context document in workspace
  */
 export async function updateContextDocument(
-  team: string,
-  file: string,
+  workspace: string,
+  path: string,
   content: string,
   userPayload: JWTPayload
 ): Promise<{ success: boolean; message: string }> {
-  // Verify team access
-  if (userPayload.team_id !== team) {
-    throw new Error(`Cannot write to team '${team}'. Your team is '${userPayload.team_id}'`)
-  }
+  const storage = getStorage()
+  const permissionManager = getPermissionManager()
 
   // Check write permission
-  if (!userPayload.permissions.includes('write:docs')) {
-    throw new Error('Missing required permission: write:docs')
-  }
+  await permissionManager.assertCanWriteDocument(userPayload, workspace, path)
 
-  const storage = getStorage()
-  await storage.writeDocument(team, file, content)
+  // Resolve symlink to find storage location
+  const resolved = await storage.resolveSymlink(workspace, path)
+
+  // Write to storage (updates the original file)
+  await storage.writeToStorage(resolved.team, resolved.file, content)
 
   return {
     success: true,
-    message: `Document ${team}/${file} updated successfully`,
+    message: `Document ${workspace}/${path} updated successfully (storage: ${resolved.team}/${resolved.file})`,
   }
 }

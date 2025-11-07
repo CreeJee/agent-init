@@ -1,73 +1,69 @@
 import * as v from 'valibot'
 import { getStorage } from '../storage/filesystem.js'
-import type { WriteContextInput, WriteContextResponse, JWTPayload } from '../schemas.js'
-import { WriteContextInputSchema } from '../schemas.js'
+import { getPermissionManager } from '../auth/permission-manager.js'
+import type { JWTPayload } from '../schemas.js'
 
 /**
- * write_context tool implementation
+ * Input schema for write_context tool
+ */
+const WriteContextInputSchema = v.object({
+  workspace: v.pipe(
+    v.string(),
+    v.minLength(1, 'Workspace must not be empty'),
+    v.regex(/^[a-zA-Z0-9_-]+$/, 'Workspace name must be alphanumeric')
+  ),
+  path: v.pipe(
+    v.string(),
+    v.minLength(1, 'Path must not be empty'),
+    v.regex(/^[a-zA-Z0-9_-]+\.md$/, 'Path must be a markdown file')
+  ),
+  content: v.pipe(
+    v.string(),
+    v.maxLength(1048576, 'Content exceeds 1MB limit')
+  ),
+})
+
+type WriteContextInput = v.InferOutput<typeof WriteContextInputSchema>
+
+/**
+ * write_context tool implementation (Workspace-based)
  *
- * Permissions:
- * - Requires write:docs permission
- * - Can only write to user's own team
+ * Updates documents in workspace by writing to the underlying storage file.
+ * - Resolves symlink to find actual storage location
+ * - Requires write permission for the workspace
+ * - Updates affect all workspaces that reference the same storage file
  */
 export async function writeContext(
   input: unknown,
   jwtPayload: JWTPayload
-): Promise<WriteContextResponse> {
-  // Get team from JWT payload
-  const currentTeamId = jwtPayload.team_id
-
-  // Check write permission
-  if (!jwtPayload.permissions.includes('write:docs')) {
-    throw new Error('Missing required permission: write:docs')
-  }
-
+): Promise<{
+  success: boolean
+  workspace: string
+  path: string
+  message?: string
+}> {
   const params = v.parse(WriteContextInputSchema, input)
 
   const storage = getStorage()
+  const permissionManager = getPermissionManager()
 
-  // Users can only write to their own team
-  if (params.team !== currentTeamId) {
-    throw new Error(`Permission denied: Cannot write to team '${params.team}'. Your team is '${currentTeamId}'`)
-  }
+  // Check write permission
+  await permissionManager.assertCanWriteDocument(
+    jwtPayload,
+    params.workspace,
+    params.path
+  )
 
-  await storage.writeDocument(params.team, params.file, params.content)
+  // Resolve symlink to find storage location
+  const resolved = await storage.resolveSymlink(params.workspace, params.path)
+
+  // Write to storage (updates the original file)
+  await storage.writeToStorage(resolved.team, resolved.file, params.content)
 
   return {
     success: true,
-    team: params.team,
-    file: params.file,
-    message: `Document ${params.team}/${params.file} updated successfully`,
-  }
-}
-
-/**
- * Get MCP tool definition for write_context
- */
-export function getWriteContextToolDefinition() {
-  return {
-    name: 'write_context',
-    description: `Create or update a team context document.
-Requires write:docs permission.
-Use this to update outdated documentation or create new context files.
-Maximum content size: 1MB.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        team: {
-          type: 'string',
-          description: 'Team name (alphanumeric, dashes, underscores)',
-        },
-        file: {
-          type: 'string',
-          description: 'File name (must end with .md)',
-        },
-        content: {
-          type: 'string',
-          description: 'Markdown content to write',
-        },
-      },
-      required: ['team', 'file', 'content'],
-    },
+    workspace: params.workspace,
+    path: params.path,
+    message: `Document ${params.workspace}/${params.path} updated successfully (storage: ${resolved.team}/${resolved.file})`,
   }
 }

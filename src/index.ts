@@ -7,6 +7,20 @@ import type { AppVariables } from './types.js'
 import { mcpServer } from './mcp.js'
 import { jwtAuth, getJWTPayload } from './auth/jwt.js'
 import { getContextHandler, updateContextHandler } from './api/context.js'
+import {
+  createWorkspaceHandler,
+  deleteWorkspaceHandler,
+  listWorkspacesHandler,
+  getWorkspaceHandler,
+  createSymlinkHandler,
+  deleteSymlinkHandler,
+  listSymlinksHandler,
+  validateSymlinksHandler,
+  listStorageTeamsHandler,
+  listStorageFilesHandler,
+  getStorageFileHandler,
+  updateStorageFileHandler,
+} from './api/admin.js'
 import { requestContext } from './context-store.js'
 
 const app = new Hono<{ Variables: AppVariables }>()
@@ -37,9 +51,31 @@ app.all('/mcp', jwtAuth(), async (c) => {
 })
 
 // HTTP API endpoints (with JWT authentication)
+// Context API (workspace-based)
 app.use('/api/context/*', jwtAuth())
-app.get('/api/context/:team/:file', getContextHandler)
-app.put('/api/context/:team/:file', updateContextHandler)
+app.get('/api/context/:workspace/:path', getContextHandler)
+app.put('/api/context/:workspace/:path', updateContextHandler)
+
+// Admin API (requires admin:workspaces permission)
+app.use('/admin/*', jwtAuth())
+
+// Workspace management
+app.post('/admin/workspaces', createWorkspaceHandler)
+app.get('/admin/workspaces', listWorkspacesHandler)
+app.get('/admin/workspaces/:workspace', getWorkspaceHandler)
+app.delete('/admin/workspaces/:workspace', deleteWorkspaceHandler)
+
+// Symlink management
+app.post('/admin/workspaces/:workspace/links', createSymlinkHandler)
+app.get('/admin/workspaces/:workspace/links', listSymlinksHandler)
+app.get('/admin/workspaces/:workspace/links/validate', validateSymlinksHandler)
+app.delete('/admin/workspaces/:workspace/links/:path', deleteSymlinkHandler)
+
+// Storage management
+app.get('/admin/storage', listStorageTeamsHandler)
+app.get('/admin/storage/:team', listStorageFilesHandler)
+app.get('/admin/storage/:team/:file', getStorageFileHandler)
+app.post('/admin/storage/:team', updateStorageFileHandler)
 
 // Start server
 const port = parseInt(process.env.PORT || '3000', 10)
