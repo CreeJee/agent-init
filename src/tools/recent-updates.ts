@@ -1,70 +1,72 @@
 import * as v from 'valibot'
 import { getStorage } from '../storage/filesystem.js'
-import type { RecentUpdatesInput, RecentUpdatesResponse, JWTPayload } from '../schemas.js'
-import { RecentUpdatesInputSchema } from '../schemas.js'
+import { getPermissionManager } from '../auth/permission-manager.js'
+import type { JWTPayload } from '../schemas.js'
 
 /**
- * recent_updates tool implementation
+ * Input schema for recent_updates tool
+ */
+const RecentUpdatesInputSchema = v.object({
+  workspace: v.optional(v.string()),
+  limit: v.optional(v.pipe(v.number(), v.minValue(1), v.maxValue(50))),
+})
+
+type RecentUpdatesInput = v.InferOutput<typeof RecentUpdatesInputSchema>
+
+/**
+ * recent_updates tool implementation (Workspace-based)
  *
- * Team filtering:
- * - Filters by user's team from JWT payload
- * - Users can only see updates from their own team
+ * Returns recently updated documents from accessible workspaces
+ * - If workspace specified, returns updates from that workspace only
+ * - If no workspace specified, returns updates from all accessible workspaces
  */
 export async function recentUpdates(
   input: unknown,
   jwtPayload: JWTPayload
-): Promise<RecentUpdatesResponse> {
+): Promise<{
+  updates: Array<{
+    workspace: string
+    path: string
+    title: string
+    lastModified: string
+  }>
+}> {
   const params = v.parse(RecentUpdatesInputSchema, input)
 
   const storage = getStorage()
+  const permissionManager = getPermissionManager()
 
-  // Get team from JWT payload
-  const currentTeamId = jwtPayload.team_id
-
-  // Use current user's team for filtering
-  const effectiveTeam = currentTeamId
-
-  if (params.team && params.team !== currentTeamId) {
-    throw new Error(`Access denied: You can only view updates from your own team (${currentTeamId})`)
-  }
-
+  const workspaceId = params.workspace || jwtPayload.workspace_id
   const limit = params.limit || 10
 
-  const documents = await storage.getRecentUpdates(limit, effectiveTeam)
+  // Check if user has access to the workspace
+  if (!permissionManager.canAccessWorkspace(jwtPayload, workspaceId)) {
+    throw new Error(
+      `Access denied: You don't have access to workspace '${workspaceId}'`
+    )
+  }
+
+  // Check read permission
+  if (!permissionManager.hasWorkspacePermission(jwtPayload, workspaceId, 'read')) {
+    throw new Error(
+      `Access denied: You don't have read permission for workspace '${workspaceId}'`
+    )
+  }
+
+  // Get recent documents from workspace
+  const documents = await storage.listWorkspaceDocuments(workspaceId)
+
+  // Sort by last modified (newest first) and limit
+  const recentDocs = documents
+    .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
+    .slice(0, limit)
 
   return {
-    updates: documents.map((doc) => ({
-      team: doc.team,
-      file: doc.file,
+    updates: recentDocs.map((doc) => ({
+      workspace: doc.workspace,
+      path: doc.path,
       title: doc.title,
       lastModified: doc.lastModified.toISOString(),
     })),
-  }
-}
-
-/**
- * Get MCP tool definition for recent_updates
- */
-export function getRecentUpdatesToolDefinition() {
-  return {
-    name: 'recent_updates',
-    description: `Get recently updated context documents across teams.
-Useful for discovering what has changed recently.
-Returns up to 50 documents, sorted by modification time (newest first).`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        team: {
-          type: 'string',
-          description: 'Optional: Filter by specific team',
-        },
-        limit: {
-          type: 'number',
-          description: 'Optional: Maximum number of results (1-50, default: 10)',
-          minimum: 1,
-          maximum: 50,
-        },
-      },
-    },
   }
 }

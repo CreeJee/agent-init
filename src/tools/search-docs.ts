@@ -1,5 +1,6 @@
 import * as v from 'valibot'
 import { getStorage } from '../storage/filesystem.js'
+import { getPermissionManager } from '../auth/permission-manager.js'
 import type { SearchDocsInput, SearchDocsResponse, SearchResultItem, JWTPayload } from '../schemas.js'
 import { SearchDocsInputSchema } from '../schemas.js'
 
@@ -15,16 +16,17 @@ const LARGE_FILE_THRESHOLD = 50 * 1024 // 50KB - only metadata
 const PREVIEW_LENGTH = parseInt(process.env.MAX_PREVIEW_LENGTH || '500', 10)
 
 /**
- * search_docs tool implementation
+ * search_docs tool implementation (Workspace-based)
  *
  * Strategy:
  * - Files <5KB: Return full content (prompt cache eligible)
  * - Files 5-50KB: Return preview + ResourceLink
  * - Files >50KB: Return metadata only
  *
- * Team filtering:
- * - Filters by user's team from JWT payload
- * - Users can only see documents from their own team
+ * Workspace filtering:
+ * - Uses workspace_id from JWT payload by default
+ * - Users can search in any workspace they have access to
+ * - Permission checked via PermissionManager
  */
 export async function searchDocs(
   input: unknown,
@@ -34,27 +36,39 @@ export async function searchDocs(
   const params = v.parse(SearchDocsInputSchema, input)
 
   const storage = getStorage()
+  const permissionManager = getPermissionManager()
 
-  // Get team from JWT payload
-  const currentTeamId = jwtPayload.team_id
+  // Determine which workspace to search
+  const workspaceId = params.workspace || jwtPayload.workspace_id
 
-  // Use current user's team for filtering (security: prevent cross-team access)
-  const effectiveTeam = currentTeamId
-
-  if (params.team && params.team !== currentTeamId) {
-    // User tried to access another team's documents
-    throw new Error(`Access denied: You can only search your own team (${currentTeamId})`)
+  // Check if user has access to the workspace
+  if (!permissionManager.canAccessWorkspace(jwtPayload, workspaceId)) {
+    throw new Error(
+      `Access denied: You don't have access to workspace '${workspaceId}'`
+    )
   }
 
-  // Search documents
-  const documents = await storage.searchDocuments(params.query, effectiveTeam)
+  // Check read permission
+  if (!permissionManager.hasWorkspacePermission(jwtPayload, workspaceId, 'read')) {
+    throw new Error(
+      `Access denied: You don't have read permission for workspace '${workspaceId}'`
+    )
+  }
+
+  // Search documents in the workspace
+  const documents = await storage.searchDocuments(workspaceId, params.query)
 
   // Transform to search results
   const results: SearchResultItem[] = documents.map((doc) => {
     const baseResult: SearchResultItem = {
       title: doc.title,
       preview: generatePreview(doc.content),
-      metadata: storage.toMetadata(doc),
+      metadata: {
+        team: doc.sourceTeam || 'unknown',
+        file: doc.sourceFile || doc.path,
+        size: doc.size,
+        lastModified: doc.lastModified.toISOString(),
+      },
     }
 
     // Strategy based on file size
@@ -69,7 +83,7 @@ export async function searchDocs(
       return {
         ...baseResult,
         resourceLink: {
-          uri: `context://${doc.team}/${doc.file}`,
+          uri: `context://${workspaceId}/${doc.path}`,
           mimeType: 'text/markdown' as const,
           description: `Complete ${doc.title} document (${formatSize(doc.size)})`,
         },
@@ -79,7 +93,7 @@ export async function searchDocs(
       return {
         ...baseResult,
         resourceLink: {
-          uri: `context://${doc.team}/${doc.file}`,
+          uri: `context://${workspaceId}/${doc.path}`,
           mimeType: 'text/markdown' as const,
           description: `Large document: ${doc.title} (${formatSize(doc.size)}). Request full content if needed.`,
         },
@@ -119,36 +133,4 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
-}
-
-/**
- * Get MCP tool definition for search_docs
- */
-export function getSearchDocsToolDefinition() {
-  return {
-    name: 'search_docs',
-    description: `Search for team context documents (markdown files) by query.
-Returns relevant documents with previews and metadata.
-Small files (<5KB) include full content, larger files provide ResourceLinks for on-demand fetching.
-Use this when you need to find team documentation, specs, or context.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query to find relevant documents',
-        },
-        team: {
-          type: 'string',
-          description: 'Optional: Filter by specific team (e.g., "PM", "BE", "FE", "DESIGN")',
-        },
-        tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Optional: Filter by tags (not yet implemented)',
-        },
-      },
-      required: ['query'],
-    },
-  }
 }
